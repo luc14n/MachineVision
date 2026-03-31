@@ -1,0 +1,160 @@
+\documentclass[stu,12pt,floatsintext]{apa7}
+
+\usepackage[american]{babel}
+\usepackage{csquotes}
+\usepackage[style=apa,sortcites=true,sorting=nyt,backend=biber]{biblatex}
+\usepackage{amsmath,amsthm,amssymb}
+\usepackage{multicol}
+\DeclareLanguageMapping{american}{american-apa}
+\addbibresource{bibliography.bib}
+\usepackage[T1]{fontenc} 
+\usepackage{mathptmx}
+
+% Title page stuff _____________________
+\title{Project Proposal}
+\shorttitle{Predictive Object Tracking} % The short title for the header
+\author{Lucian Rectanus}
+\duedate{March 24, 2026}
+% \date{January 17, 2024} The student version doesn't use the \date command, for whatever reason
+\affiliation{Frostburg State University}
+\course{MATH 470}
+\professor{Dr. Barnett}
+
+%\abstract{}
+
+%\keywords{APA style, demonstration} % If you need to have keywords for your paper, delete the % at the start of this line
+
+\begin{document}
+\maketitle % This tells LaTeX to make the title page
+
+% \section{Introduction} This command is commented out, because I was taught it was redundant to have the paper's title and introduction together. If your instructor wants it to say "Introduction", delete the % at the start
+
+
+\section{Proposal}
+The model will be a real time predictive tracking model for a ball. A camera will record video, the video will be processed and the object located. Though this seems like only Computer science, I will be taking int the data from the camera and preforming a series of matrix operations on it, including but not limited to singular value decomposition, and other optimizations to help this program run in real time. The predictive model will be on the motion of ball, it will intake current and past positions of the ball to determine displacement, velocity and acceleration to produce a series of parametric equations to describe and predict the balls movement. I want to also try and predict estimated error for minute adjustments. The end goal will be to have a live, demonstrable project that actively tracks and predicts the future movement of a ball.
+
+\section{Model Equations}
+\subsection{Compute Steps}
+\begin{enumerate}
+    \item[\textbf{Step 1}] Input: 320x320 pixel image for time $t$\\
+    Output: Position vector\\
+    \item[]
+    \begin{enumerate}
+        \item[Step 1.1] Input: Raw 320x320 pixel image\\
+        Output: Color isolation (green)\\
+        \item[Step 1.2] Input: Color isolated image\\
+        Output: Grey scale image\\
+        \item[Step 1.3] Input: Grey scale image\\
+        Increased sharpness/contrast\\
+        Output: High contrast image\\
+        \item[Step 1.4] Input: High contrast image\\
+        Output: Sub-sampled image\\
+        \item[Step 1.5] Input: Sub-sampled image\\
+        Output: Position vector\\
+    \end{enumerate}
+
+    \item[\textbf{Step 2}] Input: Position\\
+    Output: Position Matrix\\
+    \item[]
+    \begin{enumerate}
+        \item[Step 2.0] Create array P such that,
+        \begin{equation*}
+            \begin{split}
+                P &= \{p_0, p_1, \dots , p_i\}, i \in \mathbb{N}\\
+                p_i &= (x_i,y_i)\\
+            \end{split}
+        \end{equation*}
+        In matrix form,
+        \begin{equation*}
+            \begin{bmatrix}
+                x_0 & x_1 & \dots & x_i  \\
+                y_0 & y_1 & \dots & y_i
+            \end{bmatrix}
+        \end{equation*}
+        $i$ being a program set value and should be able to be changed.\\
+        \item[Step 2.1] Iterate through list (back to front), replacing each i value with i-1. Replace first item with new position vector.\\
+    \end{enumerate} 
+    \item[\textbf{Step 3}] Input: Position Matrix\\
+    Output: Parametric equations ($y(t)$ and $x(t)$) for predicting future positions with input of time for $t_{-1}$ \dots $t_{-k}$ with $k$ being the max prediction time.\\
+    \item[]
+    \begin{enumerate}
+        \item[Step 3.1] Where the confusion begins
+    \end{enumerate}
+\end{enumerate}
+
+\subsection{Clarification}
+\subsubsection{Time}
+"Time" Will be kept as displacement via column number using 0-index. 0 being the current time, each column after is 1 unit further from time 0. For each new measure of position, right shift the columns dropping any position with time value greater than $i$. If position is not calculated (lost tracking) either the last known position will be used or the first prediction point up to k (after go to center).\\
+
+%\printbibliography
+
+\end{document}
+
+%% 
+%% Copyright (C) 2019 by Daniel A. Weiss <daniel.weiss.led at gmail.com>
+%% 
+%% This work may be distributed and/or modified under the
+%% conditions of the LaTeX Project Public License (LPPL), either
+%% version 1.3c of this license or (at your option) any later
+%% version.  The latest version of this license is in the file:
+%% 
+%% http://www.latex-project.org/lppl.txt
+%% 
+%% Users may freely modify these files without permission, as long as the
+%% copyright line and this statement are maintained intact.
+%% 
+%% This work is not endorsed by, affiliated with, or probably even known
+%% by, the American Psychological Association.
+%% 
+%% This work is "maintained" (as per LPPL maintenance status) by
+%% Daniel A. Weiss.
+%% 
+%% This work consists of the file  apa7.dtx
+%% and the derived files           apa7.ins,
+%%                                 apa7.cls,
+%%                                 apa7.pdf,
+%%                                 README,
+%%                                 APA7american.txt,
+%%                                 APA7british.txt,
+%%                                 APA7dutch.txt,
+%%                                 APA7english.txt,
+%%                                 APA7german.txt,
+%%                                 APA7ngerman.txt,
+%%                                 APA7greek.txt,
+%%                                 APA7czech.txt,
+%%                                 APA7turkish.txt,
+%%                                 APA7endfloat.cfg,
+%%                                 Figure1.pdf,
+%%                                 shortsample.tex,
+%%                                 longsample.tex, and
+%%                                 bibliography.bib.
+%% 
+%%
+%%
+%% This is file `./samples/shortsample.tex',
+%% generated with the docstrip utility.
+%%
+%% The original source files were:
+%%
+%% apa7.dtx  (with options: `shortsample')
+%% ----------------------------------------------------------------------
+%% 
+%% apa7 - A LaTeX class for formatting documents in compliance with the
+%% American Psychological Association's Publication Manual, 7th edition
+%% 
+%% Copyright (C) 2019 by Daniel A. Weiss <daniel.weiss.led at gmail.com>
+%% 
+%% This work may be distributed and/or modified under the
+%% conditions of the LaTeX Project Public License (LPPL), either
+%% version 1.3c of this license or (at your option) any later
+%% version.  The latest version of this license is in the file:
+%% 
+%% http://www.latex-project.org/lppl.txt
+%% 
+%% Users may freely modify these files without permission, as long as the
+%% copyright line and this statement are maintained intact.
+%% 
+%% This work is not endorsed by, affiliated with, or probably even known
+%% by, the American Psychological Association.
+%% 
+%% ----------------------------------------------------------------------
