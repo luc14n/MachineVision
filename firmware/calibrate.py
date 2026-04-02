@@ -1,53 +1,71 @@
 """
-calibrate.py — OpenMV LAB threshold calibration helper.
+calibrate.py — interactive monochrome calibration that generates color_config_auto.py
 
-Purpose:
-- Stream observed LAB min/max values for a center ROI in real time.
-- Help you derive a robust LAB threshold tuple for `color_config.py`.
+This script is designed for black-and-white tracking using grayscale intensity
+thresholding. It guides you through taking two samples:
 
-How to use:
-1) Open this file in OpenMV IDE and click Run.
-2) Hold/move the target ball through the expected tracking area.
-3) Watch the serial output for expanding LAB ranges.
-4) Stop after ~10–20 seconds and copy values into `color_config.py`,
-   adding a small safety margin (commonly 3–8 units per bound).
+  1) Background: ROI contains NO ball
+  2) Object:     ball fills most of the ROI
 
-Output format:
-LAB_MINMAX:l_min,l_max,a_min,a_max,b_min,b_max
+It then computes a recommended threshold and writes `color_config_auto.py`
+to the device filesystem so `main.py` can automatically pick it up.
+
+Expected workflow:
+- Open this file in OpenMV IDE and click Run
+- Use the Serial Terminal in OpenMV IDE:
+    - Press 'b' to sample background
+    - Press 'o' to sample object (ball)
+    - Press 'w' to write color_config_auto.py
+    - Press 'p' to print current recommendation again
+
+Important:
+- `color_config_auto.py` is meant to be generated; do NOT commit it to git.
+- For best results, keep lighting stable while sampling.
+
+Output:
+- Prints sample means/stddevs and the computed GRAY_THRESHOLD.
 """
 
 import time
 
 import sensor
-from pyb import LED, UART
+from pyb import USB_VCP
 
-# -----------------------------
+# -----------------------------------------------------------------------------
 # Tunables
-# -----------------------------
-UART_PORT = 3
-UART_BAUD = 115200
+# -----------------------------------------------------------------------------
 
-# Center ROI as fraction of frame size (w_frac, h_frac).
-# Keep modest so samples are mostly target pixels while being stable.
-ROI_W_FRAC = 0.30
-ROI_H_FRAC = 0.30
+# ROI size as fraction of frame size. Smaller ROI reduces background mixing.
+ROI_W_FRAC = 0.20
+ROI_H_FRAC = 0.20
 
-# Print interval to avoid flooding terminal.
-PRINT_EVERY_N_FRAMES = 3
+# Number of frames averaged per sample capture.
+SAMPLES_PER_CAPTURE = 40
 
-# Optional quality gates
-MIN_PIXELS_FOR_UPDATE = 40  # ignore tiny/noisy detections
-ENABLE_COLOR_HINT = False  # set True if you want to restrict by rough hint
+# Safety margin applied around the midpoint threshold.
+# Increase if detection is unstable; decrease if ball edges are missed.
+MARGIN_INTENSITY = 8
 
-# Very loose green-ish LAB hint (only used if ENABLE_COLOR_HINT=True)
-# OpenMV threshold format: (l_min, l_max, a_min, a_max, b_min, b_max)
-GREEN_HINT = (0, 100, -64, 10, -10, 64)
+# Defaults written into color_config_auto.py in addition to GRAY_THRESHOLD.
+DEFAULT_PIXELS_THRESHOLD = 150
+DEFAULT_AREA_THRESHOLD = 150
+DEFAULT_MERGE = True
+DEFAULT_MARGIN = 10
+DEFAULT_DRAW_OVERLAY = True
+DEFAULT_DRAW_RECT = False
+
+# Sensor control defaults written to auto config.
+DEFAULT_AUTO_GAIN = True
+DEFAULT_AUTO_EXPOSURE = True
+DEFAULT_AUTO_WHITEBAL = True
 
 
-# -----------------------------
+# -----------------------------------------------------------------------------
 # Helpers
-# -----------------------------
-def clamp(v, lo, hi):
+# -----------------------------------------------------------------------------
+
+
+def _clamp(v, lo, hi):
     if v < lo:
         return lo
     if v > hi:
@@ -55,142 +73,204 @@ def clamp(v, lo, hi):
     return v
 
 
-def roi_from_sensor():
+def _roi_from_sensor():
     w = sensor.width()
     h = sensor.height()
-    rw = int(w * ROI_W_FRAC)
-    rh = int(h * ROI_H_FRAC)
-    rw = clamp(rw, 8, w)
-    rh = clamp(rh, 8, h)
+    rw = _clamp(int(w * ROI_W_FRAC), 8, w)
+    rh = _clamp(int(h * ROI_H_FRAC), 8, h)
     rx = (w - rw) // 2
     ry = (h - rh) // 2
     return (rx, ry, rw, rh)
 
 
-def init_sensor():
-    sensor.reset()
-    sensor.set_pixformat(sensor.RGB565)  # Required for LAB operations
-    sensor.set_framesize(sensor.QVGA)  # 320x240, good balance for calibration
-    sensor.skip_frames(time=1200)
-    # Disable auto adjustments for stable color readings
-    sensor.set_auto_gain(False)
-    sensor.set_auto_whitebal(False)
-    sensor.set_auto_exposure(False)
-    return time.clock()
+def _mean_and_std_for_roi(roi, n_frames):
+    # Collect mean/std across frames and average them. Std averaging is an
+    # approximation, but good enough for calibration guardrails.
+    mean_sum = 0.0
+    std_sum = 0.0
 
-
-def init_uart():
-    return UART(UART_PORT, UART_BAUD, timeout_char=1000)
-
-
-def emit(uart, text):
-    # OpenMV UART expects bytes
-    uart.write((text + "\n").encode())
-
-
-# -----------------------------
-# Main calibration routine
-# -----------------------------
-def run():
-    led_g = LED(2)  # green LED
-    led_r = LED(1)  # red LED
-
-    clock = init_sensor()
-    uart = init_uart()
-    roi = roi_from_sensor()
-
-    # Running extrema (initialize to opposite bounds)
-    l_min, l_max = 255, 0
-    a_min, a_max = 255, 0
-    b_min, b_max = 255, 0
-
-    frame_idx = 0
-    updated_once = False
-
-    emit(uart, "CALIBRATE_START")
-    emit(uart, "ROI:{},{},{},{}".format(roi[0], roi[1], roi[2], roi[3]))
-
-    while True:
-        clock.tick()
+    for _ in range(n_frames):
         img = sensor.snapshot()
+        stats = img.get_statistics(roi=roi)
+        mean_sum += stats.l_mean()
+        std_sum += stats.l_stdev()
 
-        # Draw ROI for visual guidance in OpenMV IDE framebuffer.
-        img.draw_rectangle(roi, color=(255, 255, 255), thickness=1)
+    return (mean_sum / n_frames, std_sum / n_frames)
 
-        # Option A: direct LAB stats on ROI
-        if not ENABLE_COLOR_HINT:
-            stats = img.get_statistics(roi=roi)
-            # stats object fields are available as methods on OpenMV
-            l_lo, l_hi = stats.l_min(), stats.l_max()
-            a_lo, a_hi = stats.a_min(), stats.a_max()
-            b_lo, b_hi = stats.b_min(), stats.b_max()
 
-            # crude gate: skip pathological empty/noisy updates
-            # (for direct stats we approximate confidence by spread sanity)
-            if (l_hi - l_lo) >= 0:
-                l_min = min(l_min, l_lo)
-                l_max = max(l_max, l_hi)
-                a_min = min(a_min, a_lo)
-                a_max = max(a_max, a_hi)
-                b_min = min(b_min, b_lo)
-                b_max = max(b_max, b_hi)
-                updated_once = True
-                led_g.on()
-                led_r.off()
+def _recommend_threshold(bg_mean, obj_mean):
+    """
+    Compute GRAY_THRESHOLD based on which side of the background the object lies.
+
+    Returns:
+      (threshold_tuple, mode_string)
+
+    mode_string:
+      - "dark"   -> object darker than background -> threshold (0, hi)
+      - "bright" -> object brighter than background -> threshold (lo, 255)
+    """
+    mid = int((bg_mean + obj_mean) / 2)
+    mid = _clamp(mid, 0, 255)
+
+    if obj_mean < bg_mean:
+        # Object is darker: select low intensities up to mid (+ margin)
+        hi = _clamp(mid + MARGIN_INTENSITY, 0, 255)
+        return (0, hi), "dark"
+    else:
+        # Object is brighter: select high intensities from mid (- margin)
+        lo = _clamp(mid - MARGIN_INTENSITY, 0, 255)
+        return (lo, 255), "bright"
+
+
+def _write_auto_config(gray_threshold, roi):
+    """
+    Write firmware/color_config_auto.py onto the device filesystem.
+    """
+    content_lines = [
+        '"""',
+        "AUTO-GENERATED FILE — DO NOT EDIT BY HAND",
+        "",
+        "Generated by `firmware/calibrate.py` on the OpenMV device.",
+        "This file overrides `firmware/color_config.py` when present.",
+        '"""',
+        "",
+        "# Grayscale threshold tuple (lo, hi) in [0, 255]",
+        "GRAY_THRESHOLD = ({}, {})".format(
+            int(gray_threshold[0]), int(gray_threshold[1])
+        ),
+        "",
+        "# Blob filtering",
+        "PIXELS_THRESHOLD = {}".format(int(DEFAULT_PIXELS_THRESHOLD)),
+        "AREA_THRESHOLD = {}".format(int(DEFAULT_AREA_THRESHOLD)),
+        "MERGE = {}".format("True" if DEFAULT_MERGE else "False"),
+        "MARGIN = {}".format(int(DEFAULT_MARGIN)),
+        "",
+        "# Optional ROI restriction; keep None unless you want to lock it down",
+        "# Format: (x, y, w, h)",
+        "ROI = {}".format("None"),
+        "",
+        "# Sensor auto-controls",
+        "AUTO_GAIN = {}".format("True" if DEFAULT_AUTO_GAIN else "False"),
+        "AUTO_EXPOSURE = {}".format("True" if DEFAULT_AUTO_EXPOSURE else "False"),
+        "AUTO_WHITEBAL = {}".format("True" if DEFAULT_AUTO_WHITEBAL else "False"),
+        "",
+        "# Overlay / debug",
+        "DRAW_OVERLAY = {}".format("True" if DEFAULT_DRAW_OVERLAY else "False"),
+        "DRAW_RECT = {}".format("True" if DEFAULT_DRAW_RECT else "False"),
+        "",
+        "# Calibration metadata (for reference)",
+        "CALIBRATION_ROI = ({},{},{},{})".format(roi[0], roi[1], roi[2], roi[3]),
+        "",
+    ]
+
+    # Write to the filesystem root; OpenMV import resolves in working dir/root.
+    with open("color_config_auto.py", "w") as f:
+        f.write("\n".join(content_lines))
+
+
+def _print_help():
+    print("")
+    print("Commands:")
+    print("  b : sample BACKGROUND (no ball in ROI)")
+    print("  o : sample OBJECT (ball fills ROI)")
+    print("  p : print current recommendation")
+    print("  w : write color_config_auto.py (requires b + o)")
+    print("  h : help")
+    print("")
+
+
+# -----------------------------------------------------------------------------
+# Sensor init (GRAYSCALE proven responsive on your hardware)
+# -----------------------------------------------------------------------------
+
+sensor.reset()
+sensor.set_pixformat(sensor.GRAYSCALE)
+sensor.set_framesize(sensor.QVGA)
+sensor.skip_frames(time=2000)
+
+# NOTE: For calibration we intentionally do NOT force auto controls off.
+# Leaving them enabled tends to reflect the actual operating conditions.
+
+clock = time.clock()
+vcp = USB_VCP()
+roi = _roi_from_sensor()
+
+bg = None  # (mean, std)
+obj = None  # (mean, std)
+
+print("CALIBRATE_INTERACTIVE_START")
+print("ROI:{},{},{},{}".format(roi[0], roi[1], roi[2], roi[3]))
+_print_help()
+
+# -----------------------------------------------------------------------------
+# Main loop
+# -----------------------------------------------------------------------------
+
+while True:
+    clock.tick()
+    img = sensor.snapshot()
+
+    # Draw ROI overlay so you can position the ball properly.
+    img.draw_rectangle(roi, color=255, thickness=1)
+    cx = roi[0] + roi[2] // 2
+    cy = roi[1] + roi[3] // 2
+    img.draw_cross(cx, cy, color=255, size=8, thickness=1)
+
+    # Non-blocking read of a single command byte from USB VCP.
+    if vcp.any():
+        raw = vcp.read(1)
+        if not raw:
+            continue
+
+        try:
+            cmd = raw.decode("utf-8").lower()
+        except Exception:
+            cmd = ""
+
+        if cmd == "h":
+            _print_help()
+
+        elif cmd == "b":
+            print("Sampling BACKGROUND... (keep ROI clear)")
+            bg = _mean_and_std_for_roi(roi, SAMPLES_PER_CAPTURE)
+            print("BACKGROUND mean={:.1f} std={:.1f}".format(bg[0], bg[1]))
+
+        elif cmd == "o":
+            print("Sampling OBJECT... (ball fills ROI)")
+            obj = _mean_and_std_for_roi(roi, SAMPLES_PER_CAPTURE)
+            print("OBJECT mean={:.1f} std={:.1f}".format(obj[0], obj[1]))
+
+        elif cmd == "p":
+            if (bg is None) or (obj is None):
+                print("Need both samples first. Press 'b' then 'o'.")
             else:
-                led_g.off()
-                led_r.on()
-
-        # Option B: constrained by rough color hint blobs
-        else:
-            blobs = img.find_blobs(
-                [GREEN_HINT],
-                roi=roi,
-                merge=True,
-                pixels_threshold=MIN_PIXELS_FOR_UPDATE,
-            )
-            if blobs:
-                # Use the largest blob as calibration sample source
-                largest = blobs[0]
-                for b in blobs:
-                    if b.pixels() > largest.pixels():
-                        largest = b
-
-                bx, by, bw, bh = largest.rect()
-                stats = img.get_statistics(roi=(bx, by, bw, bh))
-                l_lo, l_hi = stats.l_min(), stats.l_max()
-                a_lo, a_hi = stats.a_min(), stats.a_max()
-                b_lo, b_hi = stats.b_min(), stats.b_max()
-
-                l_min = min(l_min, l_lo)
-                l_max = max(l_max, l_hi)
-                a_min = min(a_min, a_lo)
-                a_max = max(a_max, a_hi)
-                b_min = min(b_min, b_lo)
-                b_max = max(b_max, b_hi)
-                updated_once = True
-
-                img.draw_rectangle(largest.rect(), color=(0, 255, 0), thickness=2)
-                led_g.on()
-                led_r.off()
-            else:
-                led_g.off()
-                led_r.on()
-
-        frame_idx += 1
-        if frame_idx % PRINT_EVERY_N_FRAMES == 0:
-            fps = clock.fps()
-            if updated_once:
-                line = "LAB_MINMAX:{},{},{},{},{},{} FPS:{:.1f}".format(
-                    l_min, l_max, a_min, a_max, b_min, b_max, fps
+                thr, mode = _recommend_threshold(bg[0], obj[0])
+                print(
+                    "Mode: {} (object {} than background)".format(
+                        mode, "darker" if mode == "dark" else "brighter"
+                    )
                 )
-                emit(uart, line)
-                print(line)
+                print("Recommended GRAY_THRESHOLD = ({}, {})".format(thr[0], thr[1]))
+                print(
+                    "bg_mean={:.1f} obj_mean={:.1f} margin={}".format(
+                        bg[0], obj[0], MARGIN_INTENSITY
+                    )
+                )
+
+        elif cmd == "w":
+            if (bg is None) or (obj is None):
+                print("Need both samples first. Press 'b' then 'o'.")
             else:
-                line = "LAB_MINMAX:NA FPS:{:.1f}".format(fps)
-                emit(uart, line)
-                print(line)
+                thr, mode = _recommend_threshold(bg[0], obj[0])
+                _write_auto_config(thr, roi)
+                print("Wrote color_config_auto.py")
+                print(
+                    "Mode: {} | GRAY_THRESHOLD = ({}, {})".format(mode, thr[0], thr[1])
+                )
+                print(
+                    "Now run firmware/main.py; it should prefer color_config_auto.py."
+                )
 
-
-# Entry point
-run()
+        else:
+            # Ignore other characters (like newlines) to keep interaction smooth.
+            pass
