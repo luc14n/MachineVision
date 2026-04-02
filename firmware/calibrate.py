@@ -1,52 +1,49 @@
 """
-calibrate.py — interactive monochrome calibration that generates color_config_auto.py
+calibrate.py — timed monochrome calibration + auto-config generation (no input required)
 
-This script is designed for black-and-white tracking using grayscale intensity
-thresholding. It guides you through taking two samples:
+Use this when you cannot send commands to the device via serial.
 
-  1) Background: ROI contains NO ball
-  2) Object:     ball fills most of the ROI
+What it does:
+1) Initializes the camera in GRAYSCALE/QVGA.
+2) Samples BACKGROUND statistics for N seconds (make sure the ball is NOT in ROI).
+3) Waits a short "swap" interval (place the ball in ROI).
+4) Samples OBJECT statistics for N seconds (ball should fill most of ROI).
+5) Computes a recommended GRAY_THRESHOLD based on background/object midpoint.
+6) Writes `color_config_auto.py` to the device filesystem so `main.py` can
+   auto-import it on the next run.
 
-It then computes a recommended threshold and writes `color_config_auto.py`
-to the device filesystem so `main.py` can automatically pick it up.
-
-Expected workflow:
-- Open this file in OpenMV IDE and click Run
-- Use the Serial Terminal in OpenMV IDE:
-    - Press 'b' to sample background
-    - Press 'o' to sample object (ball)
-    - Press 'w' to write color_config_auto.py
-    - Press 'p' to print current recommendation again
-
-Important:
-- `color_config_auto.py` is meant to be generated; do NOT commit it to git.
-- For best results, keep lighting stable while sampling.
-
-Output:
-- Prints sample means/stddevs and the computed GRAY_THRESHOLD.
+Notes:
+- This is designed for a black-and-white camera using intensity segmentation.
+- If your ball is darker than the background, threshold will be (0, hi).
+- If your ball is brighter than the background, threshold will be (lo, 255).
+- `color_config_auto.py` is generated on-device and should NOT be committed.
 """
 
 import time
 
 import sensor
-from pyb import USB_VCP
 
 # -----------------------------------------------------------------------------
 # Tunables
 # -----------------------------------------------------------------------------
 
-# ROI size as fraction of frame size. Smaller ROI reduces background mixing.
+# ROI size (fraction of frame). Smaller ROI reduces background mixing.
 ROI_W_FRAC = 0.20
 ROI_H_FRAC = 0.20
 
-# Number of frames averaged per sample capture.
-SAMPLES_PER_CAPTURE = 40
+# Sampling durations (seconds)
+BACKGROUND_SAMPLE_S = 3.0
+OBJECT_SAMPLE_S = 3.0
 
-# Safety margin applied around the midpoint threshold.
-# Increase if detection is unstable; decrease if ball edges are missed.
+# Time between phases to reposition the ball (seconds)
+SWAP_INTERVAL_S = 2.0
+
+# Safety margin applied around the midpoint threshold (intensity units).
+# Increase if the ball is intermittently lost; decrease if too much background
+# is included as "ball".
 MARGIN_INTENSITY = 8
 
-# Defaults written into color_config_auto.py in addition to GRAY_THRESHOLD.
+# Config defaults written to color_config_auto.py
 DEFAULT_PIXELS_THRESHOLD = 150
 DEFAULT_AREA_THRESHOLD = 150
 DEFAULT_MERGE = True
@@ -54,11 +51,9 @@ DEFAULT_MARGIN = 10
 DEFAULT_DRAW_OVERLAY = True
 DEFAULT_DRAW_RECT = False
 
-# Sensor control defaults written to auto config.
 DEFAULT_AUTO_GAIN = True
 DEFAULT_AUTO_EXPOSURE = True
 DEFAULT_AUTO_WHITEBAL = True
-
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -83,54 +78,64 @@ def _roi_from_sensor():
     return (rx, ry, rw, rh)
 
 
-def _mean_and_std_for_roi(roi, n_frames):
-    # Collect mean/std across frames and average them. Std averaging is an
-    # approximation, but good enough for calibration guardrails.
+def _sample_stats_for_seconds(roi, duration_s):
+    """
+    Average mean and stdev across frames for the given duration.
+    Returns: (mean_avg, stdev_avg, n_frames)
+    """
+    t0 = time.ticks_ms()
     mean_sum = 0.0
     std_sum = 0.0
+    n = 0
 
-    for _ in range(n_frames):
+    while True:
         img = sensor.snapshot()
-        stats = img.get_statistics(roi=roi)
-        mean_sum += stats.l_mean()
-        std_sum += stats.l_stdev()
+        img.draw_rectangle(roi, color=255, thickness=1)
+        cx = roi[0] + roi[2] // 2
+        cy = roi[1] + roi[3] // 2
+        img.draw_cross(cx, cy, color=255, size=8, thickness=1)
 
-    return (mean_sum / n_frames, std_sum / n_frames)
+        st = img.get_statistics(roi=roi)
+        mean_sum += st.l_mean()
+        std_sum += st.l_stdev()
+        n += 1
+
+        if time.ticks_diff(time.ticks_ms(), t0) >= int(duration_s * 1000):
+            break
+
+    if n <= 0:
+        return 0.0, 0.0, 0
+
+    return mean_sum / n, std_sum / n, n
 
 
 def _recommend_threshold(bg_mean, obj_mean):
     """
-    Compute GRAY_THRESHOLD based on which side of the background the object lies.
-
-    Returns:
-      (threshold_tuple, mode_string)
-
-    mode_string:
-      - "dark"   -> object darker than background -> threshold (0, hi)
-      - "bright" -> object brighter than background -> threshold (lo, 255)
+    Returns: (gray_threshold_tuple, mode_string, midpoint_int)
+      mode_string is "dark" or "bright"
     """
     mid = int((bg_mean + obj_mean) / 2)
     mid = _clamp(mid, 0, 255)
 
     if obj_mean < bg_mean:
-        # Object is darker: select low intensities up to mid (+ margin)
+        # Object darker than background
         hi = _clamp(mid + MARGIN_INTENSITY, 0, 255)
-        return (0, hi), "dark"
+        return (0, hi), "dark", mid
     else:
-        # Object is brighter: select high intensities from mid (- margin)
+        # Object brighter than background
         lo = _clamp(mid - MARGIN_INTENSITY, 0, 255)
-        return (lo, 255), "bright"
+        return (lo, 255), "bright", mid
 
 
-def _write_auto_config(gray_threshold, roi):
+def _write_auto_config(gray_threshold, roi, bg_mean, obj_mean, mode, midpoint):
     """
-    Write firmware/color_config_auto.py onto the device filesystem.
+    Writes color_config_auto.py to device filesystem.
     """
-    content_lines = [
+    lines = [
         '"""',
         "AUTO-GENERATED FILE — DO NOT EDIT BY HAND",
         "",
-        "Generated by `firmware/calibrate.py` on the OpenMV device.",
+        "Generated by `firmware/calibrate.py` (timed calibration).",
         "This file overrides `firmware/color_config.py` when present.",
         '"""',
         "",
@@ -145,9 +150,8 @@ def _write_auto_config(gray_threshold, roi):
         "MERGE = {}".format("True" if DEFAULT_MERGE else "False"),
         "MARGIN = {}".format(int(DEFAULT_MARGIN)),
         "",
-        "# Optional ROI restriction; keep None unless you want to lock it down",
-        "# Format: (x, y, w, h)",
-        "ROI = {}".format("None"),
+        "# Optional ROI restriction (None = full frame search)",
+        "ROI = None",
         "",
         "# Sensor auto-controls",
         "AUTO_GAIN = {}".format("True" if DEFAULT_AUTO_GAIN else "False"),
@@ -160,27 +164,20 @@ def _write_auto_config(gray_threshold, roi):
         "",
         "# Calibration metadata (for reference)",
         "CALIBRATION_ROI = ({},{},{},{})".format(roi[0], roi[1], roi[2], roi[3]),
+        "CALIBRATION_BACKGROUND_MEAN = {:.3f}".format(bg_mean),
+        "CALIBRATION_OBJECT_MEAN = {:.3f}".format(obj_mean),
+        "CALIBRATION_MODE = {!r}".format(mode),
+        "CALIBRATION_MIDPOINT = {}".format(int(midpoint)),
+        "CALIBRATION_MARGIN_INTENSITY = {}".format(int(MARGIN_INTENSITY)),
         "",
     ]
 
-    # Write to the filesystem root; OpenMV import resolves in working dir/root.
     with open("color_config_auto.py", "w") as f:
-        f.write("\n".join(content_lines))
-
-
-def _print_help():
-    print("")
-    print("Commands:")
-    print("  b : sample BACKGROUND (no ball in ROI)")
-    print("  o : sample OBJECT (ball fills ROI)")
-    print("  p : print current recommendation")
-    print("  w : write color_config_auto.py (requires b + o)")
-    print("  h : help")
-    print("")
+        f.write("\n".join(lines))
 
 
 # -----------------------------------------------------------------------------
-# Sensor init (GRAYSCALE proven responsive on your hardware)
+# Main
 # -----------------------------------------------------------------------------
 
 sensor.reset()
@@ -188,89 +185,50 @@ sensor.set_pixformat(sensor.GRAYSCALE)
 sensor.set_framesize(sensor.QVGA)
 sensor.skip_frames(time=2000)
 
-# NOTE: For calibration we intentionally do NOT force auto controls off.
-# Leaving them enabled tends to reflect the actual operating conditions.
+# For calibration, leave auto controls enabled by default so the threshold
+# reflects real operating conditions.
+if hasattr(sensor, "set_auto_gain"):
+    sensor.set_auto_gain(True)
+if hasattr(sensor, "set_auto_exposure"):
+    sensor.set_auto_exposure(True)
+if hasattr(sensor, "set_auto_whitebal"):
+    sensor.set_auto_whitebal(True)
 
-clock = time.clock()
-vcp = USB_VCP()
 roi = _roi_from_sensor()
 
-bg = None  # (mean, std)
-obj = None  # (mean, std)
-
-print("CALIBRATE_INTERACTIVE_START")
+print("CALIBRATE_TIMED_START")
 print("ROI:{},{},{},{}".format(roi[0], roi[1], roi[2], roi[3]))
-_print_help()
+print(
+    "Step 1/3: BACKGROUND sampling for {:.1f}s (keep ball OUT of ROI)".format(
+        BACKGROUND_SAMPLE_S
+    )
+)
 
-# -----------------------------------------------------------------------------
-# Main loop
-# -----------------------------------------------------------------------------
+bg_mean, bg_std, bg_n = _sample_stats_for_seconds(roi, BACKGROUND_SAMPLE_S)
+print("BACKGROUND: mean={:.2f} std={:.2f} n={}".format(bg_mean, bg_std, bg_n))
 
-while True:
-    clock.tick()
-    img = sensor.snapshot()
+print("Step 2/3: Swap interval {:.1f}s (place ball IN ROI now)".format(SWAP_INTERVAL_S))
+time.sleep(SWAP_INTERVAL_S)
 
-    # Draw ROI overlay so you can position the ball properly.
-    img.draw_rectangle(roi, color=255, thickness=1)
-    cx = roi[0] + roi[2] // 2
-    cy = roi[1] + roi[3] // 2
-    img.draw_cross(cx, cy, color=255, size=8, thickness=1)
+print(
+    "Step 3/3: OBJECT sampling for {:.1f}s (ball should fill ROI)".format(
+        OBJECT_SAMPLE_S
+    )
+)
+obj_mean, obj_std, obj_n = _sample_stats_for_seconds(roi, OBJECT_SAMPLE_S)
+print("OBJECT: mean={:.2f} std={:.2f} n={}".format(obj_mean, obj_std, obj_n))
 
-    # Non-blocking read of a single command byte from USB VCP.
-    if vcp.any():
-        raw = vcp.read(1)
-        if not raw:
-            continue
+thr, mode, midpoint = _recommend_threshold(bg_mean, obj_mean)
 
-        try:
-            cmd = raw.decode("utf-8").lower()
-        except Exception:
-            cmd = ""
+print("Recommendation:")
+print(
+    "  mode={} (object {} than background)".format(
+        mode, "darker" if mode == "dark" else "brighter"
+    )
+)
+print("  midpoint={} margin={}".format(midpoint, MARGIN_INTENSITY))
+print("  GRAY_THRESHOLD = ({}, {})".format(thr[0], thr[1]))
 
-        if cmd == "h":
-            _print_help()
-
-        elif cmd == "b":
-            print("Sampling BACKGROUND... (keep ROI clear)")
-            bg = _mean_and_std_for_roi(roi, SAMPLES_PER_CAPTURE)
-            print("BACKGROUND mean={:.1f} std={:.1f}".format(bg[0], bg[1]))
-
-        elif cmd == "o":
-            print("Sampling OBJECT... (ball fills ROI)")
-            obj = _mean_and_std_for_roi(roi, SAMPLES_PER_CAPTURE)
-            print("OBJECT mean={:.1f} std={:.1f}".format(obj[0], obj[1]))
-
-        elif cmd == "p":
-            if (bg is None) or (obj is None):
-                print("Need both samples first. Press 'b' then 'o'.")
-            else:
-                thr, mode = _recommend_threshold(bg[0], obj[0])
-                print(
-                    "Mode: {} (object {} than background)".format(
-                        mode, "darker" if mode == "dark" else "brighter"
-                    )
-                )
-                print("Recommended GRAY_THRESHOLD = ({}, {})".format(thr[0], thr[1]))
-                print(
-                    "bg_mean={:.1f} obj_mean={:.1f} margin={}".format(
-                        bg[0], obj[0], MARGIN_INTENSITY
-                    )
-                )
-
-        elif cmd == "w":
-            if (bg is None) or (obj is None):
-                print("Need both samples first. Press 'b' then 'o'.")
-            else:
-                thr, mode = _recommend_threshold(bg[0], obj[0])
-                _write_auto_config(thr, roi)
-                print("Wrote color_config_auto.py")
-                print(
-                    "Mode: {} | GRAY_THRESHOLD = ({}, {})".format(mode, thr[0], thr[1])
-                )
-                print(
-                    "Now run firmware/main.py; it should prefer color_config_auto.py."
-                )
-
-        else:
-            # Ignore other characters (like newlines) to keep interaction smooth.
-            pass
+_write_auto_config(thr, roi, bg_mean, obj_mean, mode, midpoint)
+print("Wrote color_config_auto.py")
+print("Now run firmware/main.py; it should prefer color_config_auto.py if present.")
