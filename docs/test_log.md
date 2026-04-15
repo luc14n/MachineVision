@@ -13,6 +13,54 @@ manual firmware validation.
 
 ---
 
+## Phase 0 Hardware Bring-Up Verification Checklist
+
+Use this checklist during OpenMV/Portenta bring-up to confirm all Phase 0
+acceptance items are complete.
+
+### Preconditions
+- OpenMV IDE is installed and launches correctly.
+- Portenta H7 + Vision Shield is connected via USB data cable.
+- Board has OpenMV runtime flashed (or can be updated from IDE).
+
+### Checklist
+- [X] Board connects in OpenMV IDE without persistent errors.
+- [X] Live camera framebuffer appears in OpenMV IDE.
+- [ ] `firmware/main.py` opens and runs from the repository path.
+- [ ] Serial terminal shows continuous coordinate output lines.
+- [ ] No-detection case emits sentinel `-1,-1`.
+- [ ] Detection caose emits normalized coordinate pairs (`nx,ny` in [0,1]).
+- [ ] `firmware/calibrate.py` runs and prints LAB min/max updates.
+- [ ] `firmware/color_config.py` can be updated from calibration values.
+- [ ] Power-cycle behavior is understood (Run vs Deploy distinction verified).
+
+### Result Template (copy for each hardware verification run)
+
+### <YYYY-MM-DD> — Phase 0 hardware bring-up verification
+- Result: PASS / FAIL
+- Environment:
+  - Board: Portenta H7 + Vision Shield
+  - Host OS: <macOS version>
+  - OpenMV IDE: <version>
+  - Firmware runtime: <version/notes>
+- Checklist Results:
+  - Board connects in IDE: PASS / FAIL
+  - Live framebuffer visible: PASS / FAIL
+  - `main.py` runs from repo: PASS / FAIL
+  - Serial streaming observed: PASS / FAIL
+  - Sentinel `-1,-1` observed: PASS / FAIL
+  - Normalized `nx,ny` observed: PASS / FAIL
+  - `calibrate.py` updates LAB ranges: PASS / FAIL
+  - `color_config.py` updated/tested: PASS / FAIL
+  - Run vs Deploy behavior verified: PASS / FAIL
+- Notes:
+  - <serial port used>
+  - <lighting conditions>
+  - <any dropped frames / disconnect behavior>
+  - <follow-up actions if FAIL>
+
+---
+
 ### 2026-04-02 — Phase 0 repository bring-up baseline
 - Result: PASS
 - Notes: Initialized project structure for upcoming phases and prepared
