@@ -176,6 +176,21 @@ def _write_auto_config(gray_threshold, roi, bg_mean, obj_mean, mode, midpoint):
         f.write("\n".join(lines))
 
 
+def _wait_with_live_view(roi, duration_s, message):
+    """
+    Wait for duration_s seconds while continuously grabbing frames so the
+    framebuffer stays live and ROI overlay remains visible.
+    """
+    print(message)
+    t0 = time.ticks_ms()
+    while time.ticks_diff(time.ticks_ms(), t0) < int(duration_s * 1000):
+        img = sensor.snapshot()
+        img.draw_rectangle(roi, color=255, thickness=1)
+        cx = roi[0] + roi[2] // 2
+        cy = roi[1] + roi[3] // 2
+        img.draw_cross(cx, cy, color=255, size=8, thickness=1)
+
+
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
@@ -208,7 +223,11 @@ bg_mean, bg_std, bg_n = _sample_stats_for_seconds(roi, BACKGROUND_SAMPLE_S)
 print("BACKGROUND: mean={:.2f} std={:.2f} n={}".format(bg_mean, bg_std, bg_n))
 
 print("Step 2/3: Swap interval {:.1f}s (place ball IN ROI now)".format(SWAP_INTERVAL_S))
-time.sleep(SWAP_INTERVAL_S)
+_wait_with_live_view(
+    roi,
+    SWAP_INTERVAL_S,
+    "Step 2/3: Swap interval {:.1f}s (place ball IN ROI now)".format(SWAP_INTERVAL_S),
+)
 
 print(
     "Step 3/3: OBJECT sampling for {:.1f}s (ball should fill ROI)".format(

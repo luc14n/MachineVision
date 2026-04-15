@@ -259,8 +259,8 @@ Phases must be completed in order. Each phase has explicit acceptance criteria �
 **Goal:** Confirm the hardware pipeline works end-to-end and all tools are in place before any algorithm work begins.
 
 #### Tasks
-- [ ] Install OpenMV IDE; flash OpenMV firmware onto the Portenta H7 + Vision Shield using the OpenMV IDE firmware updater
-- [ ] In OpenMV IDE, open `File → New File`, run a snapshot hello-world: confirm live camera feed is visible in the frame buffer panel
+- [x] Install OpenMV IDE; flash OpenMV firmware onto the Portenta H7 + Vision Shield using the OpenMV IDE firmware updater
+- [x] In OpenMV IDE, open `File → New File`, run a snapshot hello-world: confirm live camera feed is visible in the frame buffer panel
 - [ ] Create the full folder structure from Section 3 in the GitHub repo; initial commit (can be empty placeholder files)
 - [ ] Write `firmware/calibrate.py`: streams LAB values for the center region of each frame to the serial console
 - [ ] Open `firmware/calibrate.py` in OpenMV IDE (`File → Open`, navigate to the project directory); click **Run**; point camera at the green ball; record L, A, B min/max values from the serial console output
