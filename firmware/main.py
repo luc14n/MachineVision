@@ -1,3 +1,4 @@
+import struct
 import time
 
 import sensor
@@ -64,13 +65,6 @@ def _best_blob(blobs):
     return best
 
 
-def _write_line(text):
-    try:
-        vcp.write(text.encode("utf-8"))
-    except Exception:
-        pass
-
-
 while True:
     clock.tick()
     img = sensor.snapshot()
@@ -106,12 +100,6 @@ while True:
         img.draw_circle(cx, cy, r, color=255, thickness=2)
         img.draw_cross(cx, cy, color=255, size=8, thickness=1)
 
-    if blob is None:
-        _write_line("-1,-1\n")
-    else:
-        cx = blob.cx()
-        cy = blob.cy()
-
         nx = cx * inv_w
         ny = cy * inv_h
 
@@ -124,5 +112,20 @@ while True:
             ny = 0.0
         elif ny > 1.0:
             ny = 1.0
+    else:
+        nx, ny = -1.0, -1.0
 
-        _write_line("{:.4f},{:.4f}\n".format(nx, ny))
+    img.compress(quality=35)
+
+    # Pack floats and integers into a fast binary struct instead of a string
+    # 'f' is float, 'I' is unsigned integer (4 bytes)
+    # < indicates little-endian
+    header = struct.pack("<ffI", nx, ny, img.size())
+
+    try:
+        # Send a magic start sequence so the PC knows a frame is coming
+        vcp.write(b"SNAP")
+        vcp.write(header)
+        vcp.write(img)
+    except Exception:
+        pass
