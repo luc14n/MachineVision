@@ -135,9 +135,9 @@ cmake_install.cmake
 *.toc
 *.xdv
 
-# Keep intentionally committed PDFs (e.g. original proposal scan)
-# Override with: git add -f MATH_470_Project\ \(1\).pdf
-!MATH_470_Project*.pdf
+*.tex
+
+MATH_470_Project*.pdf
 
 # latexmk
 latexmk.log

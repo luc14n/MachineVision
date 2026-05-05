@@ -23,6 +23,10 @@ except ImportError:
             MARGIN = 10
             AUTO_GAIN = True
             AUTO_EXPOSURE = True
+            AUTO_WHITEBAL = True
+            EXPOSURE_US = None
+            GAIN_DB = None
+            RGB_GAIN_DB = None
 
 
 sensor.reset()
@@ -31,9 +35,47 @@ sensor.set_framesize(sensor.QVGA)
 sensor.skip_frames(time=2000)
 
 if hasattr(sensor, "set_auto_gain"):
-    sensor.set_auto_gain(getattr(color_config, "AUTO_GAIN", True))
+    if getattr(color_config, "AUTO_GAIN", True):
+        sensor.set_auto_gain(True)
+    else:
+        try:
+            gain_db = getattr(color_config, "GAIN_DB", None)
+            if gain_db is None and hasattr(sensor, "get_gain_db"):
+                gain_db = sensor.get_gain_db()
+            if gain_db is not None:
+                sensor.set_auto_gain(False, gain_db=gain_db)
+            else:
+                sensor.set_auto_gain(False)
+        except RuntimeError:
+            sensor.set_auto_gain(False)
 if hasattr(sensor, "set_auto_exposure"):
-    sensor.set_auto_exposure(getattr(color_config, "AUTO_EXPOSURE", True))
+    if getattr(color_config, "AUTO_EXPOSURE", True):
+        sensor.set_auto_exposure(True)
+    else:
+        try:
+            exp_us = getattr(color_config, "EXPOSURE_US", None)
+            if exp_us is None and hasattr(sensor, "get_exposure_us"):
+                exp_us = sensor.get_exposure_us()
+            if exp_us is not None:
+                sensor.set_auto_exposure(False, exposure_us=exp_us)
+            else:
+                sensor.set_auto_exposure(False)
+        except RuntimeError:
+            sensor.set_auto_exposure(False)
+if hasattr(sensor, "set_auto_whitebal"):
+    if getattr(color_config, "AUTO_WHITEBAL", True):
+        sensor.set_auto_whitebal(True)
+    else:
+        try:
+            rgb_gain = getattr(color_config, "RGB_GAIN_DB", None)
+            if rgb_gain is None and hasattr(sensor, "get_rgb_gain_db"):
+                rgb_gain = sensor.get_rgb_gain_db()
+            if rgb_gain is not None:
+                sensor.set_auto_whitebal(False, rgb_gain_db=rgb_gain)
+            else:
+                sensor.set_auto_whitebal(False)
+        except RuntimeError:
+            sensor.set_auto_whitebal(False)
 
 clock = time.clock()
 vcp = USB_VCP()
