@@ -22,8 +22,8 @@ The project is organized to support a phase-by-phase build from hardware bring-u
 ```text
 MachineVision/
 ├── firmware/              # OpenMV MicroPython scripts (board-side)
-├── pc_app/                # Desktop Python application
-├── tests/                 # Unit/integration tests for pc_app
+├── app/                   # Desktop Python application (SVD, Kalman, Visualization)
+├── tests/                 # Unit/integration tests for app
 ├── docs/                  # Test logs, notes, supporting docs
 ├── tools/                 # Calibration/session helper scripts
 ├── DEVELOPMENT_PLAN.md    # Phase plan and technical specification
@@ -76,7 +76,7 @@ Use `firmware/README.md` for detailed OpenMV workflow and deployment steps.
 
 ## PC Application
 
-The desktop app in `pc_app/` is responsible for:
+The desktop app in `app/` is responsible for:
 - serial ingestion and buffering,
 - session record/replay tooling,
 - SVD trajectory fitting,
@@ -110,9 +110,11 @@ Recommended baseline:
 
 1. Install Python 3.10+.
 2. Create a virtual environment.
-3. Install dependencies (once `requirements.txt` is present).
+3. Install dependencies from `requirements.txt`:
+```bash
+pip install -r requirements.txt
+```
 4. Run tests with:
-
 ```bash
 python -m pytest tests/ -v
 ```
