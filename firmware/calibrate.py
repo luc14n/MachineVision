@@ -36,7 +36,7 @@ BACKGROUND_SAMPLE_S = 3.0
 OBJECT_SAMPLE_S = 3.0
 
 # Time between phases to reposition the ball (seconds)
-SWAP_INTERVAL_S = 2.0
+SWAP_INTERVAL_S = 5.0
 
 # Safety margin applied around the midpoint threshold (intensity units).
 # Increase if the ball is intermittently lost; decrease if too much background
@@ -51,9 +51,9 @@ DEFAULT_MARGIN = 10
 DEFAULT_DRAW_OVERLAY = True
 DEFAULT_DRAW_RECT = False
 
-DEFAULT_AUTO_GAIN = True
-DEFAULT_AUTO_EXPOSURE = True
-DEFAULT_AUTO_WHITEBAL = True
+DEFAULT_AUTO_GAIN = False
+DEFAULT_AUTO_EXPOSURE = False
+DEFAULT_AUTO_WHITEBAL = False
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -127,7 +127,9 @@ def _recommend_threshold(bg_mean, obj_mean):
         return (lo, 255), "bright", mid
 
 
-def _write_auto_config(gray_threshold, roi, bg_mean, obj_mean, mode, midpoint):
+def _write_auto_config(
+    gray_threshold, roi, bg_mean, obj_mean, mode, midpoint, exp_us, gain_db, rgb_gain_db
+):
     """
     Writes color_config_auto.py to device filesystem.
     """
@@ -157,6 +159,9 @@ def _write_auto_config(gray_threshold, roi, bg_mean, obj_mean, mode, midpoint):
         "AUTO_GAIN = {}".format("True" if DEFAULT_AUTO_GAIN else "False"),
         "AUTO_EXPOSURE = {}".format("True" if DEFAULT_AUTO_EXPOSURE else "False"),
         "AUTO_WHITEBAL = {}".format("True" if DEFAULT_AUTO_WHITEBAL else "False"),
+        "EXPOSURE_US = {}".format(exp_us),
+        "GAIN_DB = {}".format(gain_db),
+        "RGB_GAIN_DB = {}".format(rgb_gain_db),
         "",
         "# Overlay / debug",
         "DRAW_OVERLAY = {}".format("True" if DEFAULT_DRAW_OVERLAY else "False"),
@@ -222,6 +227,28 @@ print(
 bg_mean, bg_std, bg_n = _sample_stats_for_seconds(roi, BACKGROUND_SAMPLE_S)
 print("BACKGROUND: mean={:.2f} std={:.2f} n={}".format(bg_mean, bg_std, bg_n))
 
+# Capture locked camera parameters from the background (room) state
+exp_us = None
+if hasattr(sensor, "get_exposure_us"):
+    try:
+        exp_us = sensor.get_exposure_us()
+    except RuntimeError:
+        pass
+
+gain_db = None
+if hasattr(sensor, "get_gain_db"):
+    try:
+        gain_db = sensor.get_gain_db()
+    except RuntimeError:
+        pass
+
+rgb_gain_db = None
+if hasattr(sensor, "get_rgb_gain_db"):
+    try:
+        rgb_gain_db = sensor.get_rgb_gain_db()
+    except RuntimeError:
+        pass
+
 print("Step 2/3: Swap interval {:.1f}s (place ball IN ROI now)".format(SWAP_INTERVAL_S))
 _wait_with_live_view(
     roi,
@@ -248,6 +275,8 @@ print(
 print("  midpoint={} margin={}".format(midpoint, MARGIN_INTENSITY))
 print("  GRAY_THRESHOLD = ({}, {})".format(thr[0], thr[1]))
 
-_write_auto_config(thr, roi, bg_mean, obj_mean, mode, midpoint)
+_write_auto_config(
+    thr, roi, bg_mean, obj_mean, mode, midpoint, exp_us, gain_db, rgb_gain_db
+)
 print("Wrote color_config_auto.py")
 print("Now run firmware/main.py; it should prefer color_config_auto.py if present.")
